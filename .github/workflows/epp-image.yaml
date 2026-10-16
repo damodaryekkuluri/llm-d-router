@@ -1,0 +1,130 @@
+# EPP image build for the fork damodaryekkuluri/llm-d-router.
+#
+# Lives on the fork's `main` branch at .github/workflows/epp-image.yaml. It builds any ref of the
+# fork (a feature branch, a tag, a commit) with the repository's own Dockerfile.epp and pushes
+# the result to GHCR under this account. The feature branches themselves stay free of workflow
+# files, so they can go upstream unchanged.
+#
+# Two ways to run it:
+#   1. Actions tab -> "EPP image" -> Run workflow. Give the ref to build and the tag to publish.
+#   2. Push a git tag that starts with "epp-" (for example epp-pcaa-1). The tag name without the
+#      "epp-" prefix becomes the image tag. The tagged commit must contain this file.
+#
+# Every build is also tagged "sha-<short sha>" so a tag can always be traced to a commit.
+
+name: EPP image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit of this repository to build
+        required: true
+        default: main
+      tag:
+        description: Image tag to publish (for example pcaa-1)
+        required: true
+  push:
+    tags:
+      - "epp-*"
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: epp-image-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-epp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve ref and tag
+        id: meta
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ref="${{ github.event.inputs.ref }}"
+            tag="${{ github.event.inputs.tag }}"
+          else
+            ref="${{ github.ref }}"
+            tag="${GITHUB_REF_NAME#epp-}"
+          fi
+          case "$tag" in
+            *[!A-Za-z0-9._-]*|"") echo "invalid image tag: '$tag'" >&2; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the ref to build
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Record the commit that is being built
+        id: commit
+        shell: bash
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push EPP (linux/amd64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.epp
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:sha-${{ steps.commit.outputs.short }}
+          build-args: |
+            COMMIT_SHA=${{ steps.commit.outputs.sha }}
+            BUILD_REF=${{ steps.meta.outputs.tag }}
+            LDFLAGS=-s -w
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.commit.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+            org.opencontainers.image.title=llm-d-router EPP
+            org.opencontainers.image.description=llm-d-router EPP built from ${{ steps.meta.outputs.ref }} (${{ steps.commit.outputs.short }})
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## EPP image"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`${{ steps.meta.outputs.ref }}\` |"
+            echo "| commit | \`${{ steps.commit.outputs.sha }}\` |"
+            echo "| image | \`${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}\` |"
+            echo "| also | \`${{ env.IMAGE }}:sha-${{ steps.commit.outputs.short }}\` |"
+            echo "| digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo
+            echo "Pin in production with the digest:"
+            echo
+            echo '```yaml'
+            echo "image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
