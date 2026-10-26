@@ -152,6 +152,8 @@ type Config struct {
 
 	// Tracing enables OpenTelemetry tracing.
 	Tracing bool
+	// EnableToolCallingTelemetry enables tool-specific request observations.
+	EnableToolCallingTelemetry bool
 	// MoRIIOWriteMode enables MoRI-IO WRITE-mode: the sidecar populates the
 	// prefill request's kv_transfer_params so the prefill engine pushes KV to decode
 	// via RDMA Write. Only meaningful with --kv-connector=nixlv2.
@@ -363,9 +365,9 @@ func (s *Server) currentDecodePodIP(ctx context.Context) string {
 
 // NewProxy creates a new routing reverse proxy from the given Config.
 func NewProxy(config Config) *Server {
-	prefillerCache, _ := lru.New[string, http.Handler](1024)         // nolint:errcheck
-	encoderCache, _ := lru.New[string, http.Handler](1024)           // nolint:errcheck
-	mooncakeEngineIDs, _ := lru.New[string, map[string]string](1024) // nolint:errcheck
+	prefillerCache, _ := lru.New[string, http.Handler](1024)
+	encoderCache, _ := lru.New[string, http.Handler](1024)
+	mooncakeEngineIDs, _ := lru.New[string, map[string]string](1024)
 
 	server := &Server{
 		readyCh:             make(chan struct{}),
